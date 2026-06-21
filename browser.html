@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Verification</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .container {
+            background: #fff;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-width: 400px;
+            width: 90%;
+        }
+        h2 { margin-top: 0; }
+        .status {
+            font-size: 1.2rem;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+        .success { color: #28a745; }
+        .error { color: #dc3545; }
+        .spinner {
+            border: 4px solid rgba(0,0,0,0.1);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border-left-color: #3390ec;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loading">
+            <div class="spinner"></div>
+            <h2>Analyzing Hardware...</h2>
+            <p>Please wait while we verify your device.</p>
+        </div>
+        <div id="result" style="display: none;">
+            <h2 id="result-title"></h2>
+            <div id="result-message" class="status"></div>
+            <p>You can now close this tab.</p>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Custom Hardware Fingerprinting Script ---
+        async function generateDeviceHash() {
+            // First, try to read a stored device ID to persist across minor hardware changes
+            let storedHash = localStorage.getItem('fp_device_id');
+            if (storedHash) {
+                return storedHash;
+            }
+
+            // Gather hardware traits
+            const traits = [];
+            
+            // Basic screen & navigator traits
+            traits.push(navigator.userAgent);
+            traits.push(navigator.language);
+            traits.push(navigator.hardwareConcurrency || 'unknown');
+            traits.push(navigator.deviceMemory || 'unknown');
+            traits.push(screen.width + 'x' + screen.height);
+            traits.push(screen.colorDepth);
+            traits.push(Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+            // Canvas Fingerprinting
+            try {
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = 200;
+                canvas.height = 50;
+                ctx.textBaseline = 'top';
+                ctx.font = "14px 'Arial'";
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillStyle = '#f60';
+                ctx.fillRect(125, 1, 62, 20);
+                ctx.fillStyle = '#069';
+                ctx.fillText("Fingerprint, \uD83D\uDE03", 2, 15);
+                ctx.fillStyle = 'rgba(102, 204, 0, 0.7)';
+                ctx.fillText("Fingerprint, \uD83D\uDE03", 4, 17);
+                traits.push(canvas.toDataURL());
+            } catch (e) {
+                traits.push('canvas-failed');
+            }
+
+            // Hash the combined string using SHA-256
+            const rawString = traits.join('|||');
+            const encoder = new TextEncoder();
+            const data = encoder.encode(rawString);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+            // Store it to keep it persistent for this browser
+            localStorage.setItem('fp_device_id', hashHex);
+            return hashHex;
+        }
+
+        // --- 2. Evaluation Logic ---
+        async function startVerification() {
+            // Parse token from URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+
+            if (!token) {
+                showResult('Error', 'No session token provided in the URL.', false);
+                return;
+            }
+
+            try {
+                const deviceHash = await generateDeviceHash();
+
+                // IMPORTANT: Replace this with your actual Vercel backend URL
+                const BACKEND_URL = 'https://device-sooty.vercel.app';
+
+                // Send to our backend
+                const response = await fetch(`${BACKEND_URL}/api/session/evaluate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, device_hash: deviceHash })
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'verified') {
+                    showResult('Verification Complete!', 'Your device has been verified successfully.', true);
+                } else if (data.status === 'rejected') {
+                    showResult('Verification Failed', 'Fraud Detected: ' + (data.reason || 'Invalid device'), false);
+                } else {
+                    showResult('Error', data.error || 'Something went wrong.', false);
+                }
+
+            } catch (error) {
+                console.error(error);
+                showResult('Error', 'Network error while verifying.', false);
+            }
+        }
+
+        function showResult(title, message, isSuccess) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('result').style.display = 'block';
+            document.getElementById('result-title').textContent = title;
+            const msgEl = document.getElementById('result-message');
+            msgEl.textContent = message;
+            msgEl.className = 'status ' + (isSuccess ? 'success' : 'error');
+        }
+
+        // Start automatically
+        setTimeout(startVerification, 800); // slight delay for UX
+    </script>
+</body>
+</html>
